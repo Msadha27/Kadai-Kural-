@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f5f4ef" />
+  <title>Kadai Kural — Your shop, your voice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Tamil:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#dashboard"><span class="brand-mark">க</span><span><b>Kadai Kural</b><small>கடைக் குரல்</small></span></a>
+      <div class="shop-switch"><span class="shop-avatar">S</span><span><b>Sri Murugan Stores</b><small>Chennai · Grocery</small></span><span class="chevron">⌄</span></div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav id="nav">
+        <button class="nav-item active" data-page="dashboard"><span>◫</span>Overview</button>
+        <button class="nav-item" data-page="billing"><span>▤</span>Billing <kbd>B</kbd></button>
+        <button class="nav-item" data-page="call"><span>☎</span>Wholesaler call</button>
+        <button class="nav-item" data-page="inventory"><span>▦</span>Inventory <i class="nav-count" id="low-count">3</i></button>
+        <button class="nav-item" data-page="orders"><span>↗</span>Purchase orders</button>
+        <button class="nav-item" data-page="analytics"><span>⌁</span>Insights</button>
+        <button class="nav-item" data-page="settings"><span>⚙</span>Integrations</button>
+      </nav>
+      <div class="sidebar-bottom"><div class="voice-mini"><div class="voice-mini-icon">✳</div><div><b>Meet your shop assistant</b><small>Ask in Tamil or English</small></div><button id="open-assistant" aria-label="Open assistant">↗</button></div><div class="user-row"><div class="user-avatar">R</div><div><b>Ravi Kumar</b><small>Shop owner</small></div><span class="dots">•••</span></div></div>
+    </aside>
+    <main class="main-area">
+      <header class="topbar"><div class="crumb">Workspace <span>/</span> <b id="crumb-page">Overview</b></div><div class="top-actions"><div class="live-date"><span class="live-dot"></span> Demo workspace</div><button class="icon-btn" title="Notifications">♧<i></i></button><div class="top-avatar">R</div></div></header>
+      <div class="content" id="page-content"></div>
+    </main>
+  </div>
+  <div class="assistant-backdrop" id="assistant-backdrop"></div>
+  <aside class="assistant-drawer" id="assistant-drawer" aria-label="Kadai Kural assistant">
+    <div class="drawer-head"><div class="assistant-identity"><div class="assistant-logo">க</div><div><b>Kadai Kural</b><small><span class="live-dot"></span> Your shop assistant</small></div></div><button class="close-btn" id="close-assistant">×</button></div>
+    <div class="assistant-welcome"><div class="eyebrow">வணக்கம், முருகன்</div><h2>இன்று கடைக்கு<br>என்ன உதவி வேண்டும்?</h2><p>இருப்பு, விற்பனை, குறைந்த கையிருப்பு அல்லது ஆர்டர் பற்றி கேளுங்கள்.</p></div>
+    <div class="suggestion-label">கேட்டுப் பாருங்கள்</div><div class="suggestions"><button data-prompt="Rice stock evlo irukku?">“Rice stock evlo irukku?” <span>↗</span></button><button data-prompt="Which items are low on stock?">“எந்தப் பொருட்கள் குறைவாக இருக்கின்றன?” <span>↗</span></button><button data-prompt="Order 10 bags of rice">“அரிசி 10 மூட்டை ஆர்டர் செய்” <span>↗</span></button></div>
+    <div class="chat-log" id="chat-log"></div>
+    <form class="assistant-compose" id="assistant-form"><button type="button" class="mic-btn" id="mic-btn" title="Start or stop listening">♩</button><input id="assistant-input" placeholder="Ask Kadai Kural anything…" autocomplete="off"><button class="send-btn" aria-label="Send">↑</button></form><div class="voice-note" id="voice-note">The assistant greets you on page load. Press Start listening to speak; it replies aloud and keeps listening until stopped.</div>
+  </aside>
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+  <script src="call-page.js"></script>
+  <script src="bridge.js"></script>
+</body>
+</html>
