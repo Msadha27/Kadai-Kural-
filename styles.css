@@ -83,3 +83,6 @@
 .voice-stock-list{display:flex;flex-direction:column;gap:7px;max-height:390px;overflow:auto}.voice-stock-row{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:8px;padding:8px 9px;border:1px solid #ffffff18;border-radius:9px;background:#ffffff08}.voice-stock-row>span{font-size:16px}.voice-stock-row b{display:block;font-size:10px;color:#f3f4fa}.voice-stock-row small{display:block;margin-top:3px;font-size:8px;color:#aab3c7}.voice-stock-row em{font-size:7px;font-style:normal;font-weight:800;letter-spacing:.5px;color:#56d19a}.voice-stock-row em.is-low{color:#ffb05b}
 
 .voice-debug-details{margin:12px 0;color:#dce3f7;border-top:1px solid #ffffff18}.voice-debug-details>summary{padding:10px 2px 7px;cursor:pointer;list-style-position:inside;font-size:10px;font-weight:700;color:#aeb9d2}.voice-debug-details:not([open]){margin-bottom:4px}.voice-debug-details[open] .voice-stage-log{max-height:110px}.voice-debug-details .voice-transcript-head{margin-top:4px}
+
+/* Keep the main voice controls visible sooner on common laptop screens. */
+@media(min-width:901px){.content{padding-top:20px}.page-head{margin-bottom:14px}.voice-console-grid{min-height:360px}.voice-stage-main{padding-top:10px;padding-bottom:10px}.voice-orb-area{min-height:165px}.voice-console-head{min-height:58px}}

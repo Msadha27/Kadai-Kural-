@@ -48,7 +48,7 @@ PRODUCTS = [
 ]
 SUPPLIER_ID = "sri-lakshmi-stores"
 SUPPLIER_NAME = "Sri Lakshmi Stores"
-SUPPLIER_SAMPLE_STOCK = {"rice": 200, "sugar": 500, "oil": 150, "dal": 250,
+SUPPLIER_SAMPLE_STOCK = {"rice": 3, "sugar": 500, "oil": 150, "dal": 250,
                          "coffee": 100, "soap": 200, "atta": 200, "milk": 300}
 
 
@@ -159,6 +159,11 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO supplier_inventory(supplier_id,product_id,available_quantity,wholesale_price,updated_at) VALUES(?,?,?,?,?)",
                 (SUPPLIER_ID, product["id"], SUPPLIER_SAMPLE_STOCK.get(product["id"], 100), product["cost"], stamp),
             )
+        # Demo supplier has only three rice bags available, matching the call scenario.
+        con.execute(
+            "UPDATE supplier_inventory SET available_quantity=3,updated_at=? WHERE supplier_id=? AND product_id='rice'",
+            (stamp, SUPPLIER_ID),
+        )
 
 
 def state() -> dict:
@@ -172,7 +177,7 @@ def state() -> dict:
             sales.append({"id": sale["id"], "total": sale["total"], "date": sale["created_at"], "items": items})
         orders = [{"id": r["id"], "productId": r["product_id"], "qty": r["quantity"], "supplier": r["supplier"],
                    "status": r["status"], "available": r["available"], "unitCost": r["unit_cost"],
-                   "quote": r["status"] != "draft", "deliveryDays": 1 if r["status"] in ("quoted", "confirmed", "received") else None, "createdAt": r["created_at"],
+                   "quote": r["status"] != "draft", "deliveryDays": 1 if r["status"] in ("quoted", "confirmed", "Placed", "received") else None, "createdAt": r["created_at"],
                    "confirmedAt": r["confirmed_at"], "receivedAt": r["received_at"]}
                   for r in con.execute("SELECT * FROM orders ORDER BY created_at DESC")]
         movements = [dict(r) for r in con.execute(
@@ -271,10 +276,18 @@ def find_product(name: str | None) -> sqlite3.Row | None:
         "sugar": ("sugar", "seeni", "sakkarai", "சீனி", "சர்க்கரை"),
         "oil": ("oil", "cooking oil", "ennai", "எண்ணெய்", "சமையல் எண்ணெய்"),
         "dal": ("dal", "toor dal", "paruppu", "thuvaram", "பருப்பு", "துவரம்"),
+        "milk": ("milk", "paal", "பால்", "பால் பாக்கெட்"),
+        "coffee": ("coffee", "filter coffee", "kaapi", "காபி"),
+        "soap": ("soap", "bath soap", "சோப்பு"),
+        "atta": ("atta", "wheat flour", "flour", "கோதுமை மாவு"),
     }
-    exact = next((r for r in rows if key in (r["name"].casefold(), r["id"].casefold(), r["tamil"].casefold())
-                  or key in aliases.get(r["id"], ())), None)
-    return exact or next((r for r in rows if key in r["name"].casefold() or r["name"].casefold() in key or key in r["tamil"].casefold()), None)
+    exact = next((r for r in rows if key in (r["name"].casefold(), r["id"].casefold(), r["tamil"].casefold())), None)
+    if exact:
+        return exact
+    matches = [(len(alias), row) for row in rows for alias in aliases.get(row["id"], ()) if alias.casefold() in key]
+    if matches:
+        return max(matches, key=lambda pair: pair[0])[1]
+    return next((r for r in rows if r["name"].casefold() in key or r["tamil"].casefold() in key), None)
 
 
 def new_order(product_id: str, quantity: int) -> dict:
@@ -479,7 +492,7 @@ async def start_phone_call(payload: PhoneCallStart):
     if payload.order_id:
         with connect() as con:
             row = con.execute("SELECT o.*,p.name,p.tamil,p.unit FROM orders o JOIN products p ON p.id=o.product_id WHERE o.id=?", (payload.order_id,)).fetchone()
-        if not row or row["status"] not in ("quoted", "confirmed"):
+        if not row or row["status"] not in ("quoted", "confirmed", "Placed"):
             raise HTTPException(409, "The call needs an order with a supplier quote first.")
         order = {"id": row["id"], "product_id": row["product_id"], "product": row["tamil"],
                  "quantity": row["quantity"], "unit": row["unit"], "status": row["status"],
@@ -514,16 +527,15 @@ async def answer_phone_call(call_id: str):
         session["pending"] = {"type": "await_dashboard_approval", "order_id": item["id"]}
     elif session.get("order"):
         item = session["order"]
-        fallback = f"சரி சார், {item['quantity']} {tamil_unit(item['unit'], item['quantity'])} {item['product']} ஆர்டர் உறுதி. நாளைக்கு அனுப்பி வைக்கிறேன்."
+        order_number = item["id"].removeprefix("ORD-").lstrip("0") or "0"
+        fallback = f"சரி சார், order number {order_number}, {item['quantity']} {tamil_unit(item['unit'], item['quantity'])} {item['product']} நாளைக்கு அனுப்பி வைக்கிறேன்."
         facts = {"approved_order": item, "delivery": "நாளை", "approved": True}
     else:
-        rice = find_product("rice")
-        fallback = (f"வணக்கம் சார்! பொன்னி அரிசி ஸ்டாக்ல இருக்கு. ஒரு மூட்டை {rice['cost']:.0f} ரூபா. "
-                    "எத்தனை மூட்டை வேணும்னு சொல்லுங்க.") if rice else "வணக்கம் சார்! அரிசி ஸ்டாக் தகவல் இப்போ கிடைக்கல."
-        facts = {"call_status": "active", "product": rice["tamil"] if rice else "அரிசி",
-                 "stock": rice["stock"] if rice else None, "unit_price": rice["cost"] if rice else None,
-                 "approved": False}
-    reply, generated_by = await supplier_call_line(session, "கடை குரல் பொன்னி அரிசி ஸ்டாக் மற்றும் விலை கேட்டது", facts, fallback)
+        catalog = state()["products"]
+        names = ", ".join(item["tamil"] for item in catalog)
+        fallback = f"வணக்கம் சார்! எந்தப் பொருளுக்கு விலை பார்க்கணும்? எங்களிடம் {names} இருக்கு."
+        facts = {"call_status": "active", "catalog": catalog, "approved": False}
+    reply, generated_by = await supplier_call_line(session, "கடை குரல் பொருள் விலை கேட்டது", facts, fallback)
     session["turns"].append({"speaker": "wholesaler", "text": reply})
     session["owner_state"] = "LISTENING"
     session["wholesaler_state"] = "LISTENING"
@@ -548,13 +560,15 @@ async def phone_call_turn(call_id: str, payload: PhoneCallTurn):
         choice = confirmation_choice(text)
         if pending and pending["type"] == "await_approval":
             if choice == "yes":
-                await confirm_order(pending["order_id"])
+                confirmation = await confirm_order(pending["order_id"])
                 item = pending["item"]
-                session["order"] = {"id": pending["order_id"], "product_id": "rice", "product": item["tamil"],
-                                    "quantity": pending["quantity"], "unit": item["unit"], "status": "confirmed"}
+                confirmed_id = confirmation["id"]
+                session["order"] = {"id": confirmed_id, "product_id": item["product_id"], "product": item["tamil"],
+                                    "quantity": pending["quantity"], "unit": item["unit"], "status": "Placed"}
                 session["pending"] = None
                 facts = {"approved": True, "order": session["order"], "delivery": "நாளை"}
-                fallback = f"சரி, {session['order']['quantity']} மூட்டை அரிசி நாளைக்கு அனுப்பி வைக்கிறேன். இன்னும் ஏதாவது வேணுமா?"
+                order_number = confirmed_id.removeprefix("ORD-").lstrip("0") or "0"
+                fallback = f"சரி, order number {order_number}, {session['order']['quantity']} {tamil_unit(item['unit'], session['order']['quantity'])} {item['tamil']} நாளைக்கு அனுப்பி வைக்கிறேன்."
                 reply, generated_by = await supplier_call_line(session, text, facts, fallback)
             elif choice == "no":
                 await cancel_order(pending["order_id"])
@@ -564,40 +578,48 @@ async def phone_call_turn(call_id: str, payload: PhoneCallTurn):
                 reply = "இந்த ஆர்டரை உறுதி செய்யட்டுமா? ஆம் அல்லது வேண்டாம்னு சொல்லுங்க."
         elif pending and pending["type"] == "await_quantity":
             quantity = parse_quantity(text)
+            product_id = pending.get("product_id", "rice")
             if not quantity or quantity > 10000:
-                reply = "எத்தனை மூட்டை அரிசி வேண்டும்? ஒரு எண்ணிக்கையா சொல்லுங்க."
+                item = find_product(product_id)
+                reply = f"எத்தனை {tamil_unit(item['unit'])} {item['tamil']} வேண்டும்? ஒரு எண்ணிக்கையா சொல்லுங்க."
             else:
-                order, quote, item = await create_supplier_quote("rice", quantity)
+                order, quote, item = await create_supplier_quote(product_id, quantity)
                 session["pending"] = {"type": "await_approval", "order_id": order["id"], "quantity": quantity,
-                                      "item": {"name": item["name"], "tamil": item["tamil"], "unit": item["unit"]}}
+                                      "item": {"product_id": item["id"], "name": item["name"], "tamil": item["tamil"], "unit": item["unit"]}}
                 facts = {"quote_available": quote["available"], "quantity": quantity, "item": item["tamil"],
                          "unit_price": quote["unit_cost"], "total": quote["total"], "delivery": "நாளை", "approved": False}
-                fallback = f"சரி, {quantity} மூட்டை அரிசி நாளைக்கு அனுப்பலாம். மொத்தம் {quote['total']:.0f} ரூபாய். ஆர்டரை உறுதி செய்யட்டுமா?"
+                unit = tamil_unit(item["unit"], quantity)
+                fallback = f"சரி, {quantity} {unit} {item['tamil']} நாளைக்கு அனுப்பலாம். மொத்தம் {quote['total']:.0f} ரூபாய். ஆர்டரை உறுதி செய்யட்டுமா?"
                 reply, generated_by = await supplier_call_line(session, text, facts, fallback)
                 session["order"] = order
         else:
             order_words = re.search(r"order|reorder|restock|need|want|venum|venuma|pannu|pannunga|வேண்டும்|வேணும்|ஆர்டர்|வாங்க|அனுப்பு|கொடு", text.casefold())
-            rice_words = re.search(r"rice|arisi|அரிசி|மூட்டை|mutta|mootai|bag", text.casefold())
+            item = find_product(text)
             quantity = parse_quantity(text)
-            if rice_words and (order_words or quantity):
+            if item and (order_words or quantity):
                 if not quantity:
-                    session["pending"] = {"type": "await_quantity"}
-                    reply = "சரி, எத்தனை மூட்டை அரிசி வேண்டும்?"
+                    session["pending"] = {"type": "await_quantity", "product_id": item["id"]}
+                    reply = f"சரி, எத்தனை {tamil_unit(item['unit'])} {item['tamil']} வேண்டும்?"
                 else:
-                    order, quote, item = await create_supplier_quote("rice", quantity)
+                    order, quote, item = await create_supplier_quote(item["id"], quantity)
                     session["pending"] = {"type": "await_approval", "order_id": order["id"], "quantity": quantity,
-                                          "item": {"name": item["name"], "tamil": item["tamil"], "unit": item["unit"]}}
+                                          "item": {"product_id": item["id"], "name": item["name"], "tamil": item["tamil"], "unit": item["unit"]}}
                     facts = {"quote_available": quote["available"], "quantity": quantity, "item": item["tamil"],
                              "unit_price": quote["unit_cost"], "total": quote["total"], "delivery": "நாளை", "approved": False}
-                    fallback = f"சரி, {quantity} மூட்டை அரிசி நாளைக்கு அனுப்பலாம். மொத்தம் {quote['total']:.0f} ரூபாய். ஆர்டரை உறுதி செய்யட்டுமா?"
+                    unit = tamil_unit(item["unit"], quantity)
+                    fallback = f"சரி, {quantity} {unit} {item['tamil']} நாளைக்கு அனுப்பலாம். மொத்தம் {quote['total']:.0f} ரூபாய். ஆர்டரை உறுதி செய்யட்டுமா?"
                     reply, generated_by = await supplier_call_line(session, text, facts, fallback)
                     session["order"] = order
             else:
-                rice = find_product("rice")
-                facts = {"rice_stock": rice["stock"] if rice else None,
-                         "item": rice["tamil"] if rice else "அரிசி", "unit": "மூட்டை",
-                         "call_status": "active", "approved": False}
-                fallback = f"இப்போ கடையில {rice['stock']} மூட்டை அரிசி இருக்கு. எத்தனை மூட்டை ஆர்டர் கேட்கட்டும்?" if rice else "எத்தனை மூட்டை அரிசி வேண்டும்?"
+                item = item or find_product("rice")
+                unit = tamil_unit(item["unit"], item["stock"])
+                with connect() as con:
+                    supplier = con.execute("SELECT available_quantity,wholesale_price FROM supplier_inventory WHERE supplier_id=? AND product_id=?", (SUPPLIER_ID, item["id"])).fetchone()
+                available = supplier["available_quantity"] if supplier else 0
+                price = supplier["wholesale_price"] if supplier else item["cost"]
+                facts = {"item": item["tamil"], "supplier_available": available, "unit": item["unit"],
+                         "unit_price": price, "call_status": "active", "approved": False}
+                fallback = f"ஆமாம் சார், {item['tamil']} {available} {unit} இருக்கு. ஒரு {unit} {price:.0f} ரூபா. எத்தனை வேணும்?"
                 reply, generated_by = await supplier_call_line(session, text, facts, fallback)
         session["turns"].append({"speaker": "wholesaler", "text": reply})
         session["owner_state"] = "LISTENING"
@@ -683,13 +705,16 @@ async def get_quote(order_id: str):
 @app.post("/api/shop/orders/{order_id}/confirm")
 async def confirm_order(order_id: str):
     with connect() as con:
+        con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Order not found.")
         if row["status"] != "quoted":
             raise HTTPException(409, "Request a quote before approving the order.")
-        con.execute("UPDATE orders SET status='confirmed',confirmed_at=? WHERE id=?", (now(), order_id))
-    return {"ok": True}
+        last_number = con.execute("SELECT MAX(CAST(SUBSTR(id,5) AS INTEGER)) FROM orders WHERE id GLOB 'ORD-[0-9]*'").fetchone()[0]
+        confirmed_id = f"ORD-{max(100, last_number or 100) + 1}"
+        con.execute("UPDATE orders SET id=?,status='Placed',confirmed_at=? WHERE id=?", (confirmed_id, now(), order_id))
+    return {"ok": True, "id": confirmed_id, "status": "Placed"}
 
 
 @app.post("/api/shop/orders/{order_id}/receive")
@@ -699,12 +724,38 @@ async def receive_order(order_id: str):
         row = con.execute("SELECT product_id,quantity,status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Order not found.")
-        if row["status"] != "confirmed":
+        if row["status"] not in ("confirmed", "Placed"):
             raise HTTPException(409, "Only an approved order can be received.")
         con.execute("UPDATE products SET stock=stock+? WHERE id=?", (row["quantity"], row["product_id"]))
         con.execute("UPDATE orders SET status='received',received_at=? WHERE id=?", (stamp, order_id))
         con.execute("INSERT INTO stock_movements(product_id,quantity,movement_type,reference_id,created_at) VALUES(?,?,?,?,?)", (row["product_id"], row["quantity"], "received", order_id, stamp))
     return {"ok": True}
+
+
+@app.post("/api/shop/orders/by-number/{order_number}/receive")
+async def receive_order_by_number(order_number: int):
+    """Receive a placed ORD-N order. The transaction prevents duplicate stock additions."""
+    order_id = f"ORD-{order_number}"
+    with connect() as con:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute(
+            "SELECT o.id,o.product_id,o.quantity,o.status,p.name,p.tamil,p.unit,p.stock "
+            "FROM orders o JOIN products p ON p.id=o.product_id WHERE o.id=?", (order_id,)
+        ).fetchone()
+        if not row:
+            return {"reply": f"ஆர்டர் எண் {order_number} கிடைக்கல. ஸ்டாக்ல மாற்றம் செய்யல.", "status": "not_found"}
+        if row["status"] == "received":
+            return {"reply": f"ஆர்டர் எண் {order_number} ஏற்கனவே வந்ததா பதிவு செய்தாச்சு. இப்போ ஸ்டாக்ல {row['stock']} {tamil_unit(row['unit'], row['stock'])} இருக்கு; மறுபடியும் சேர்க்கல.", "status": "received", "stock": row["stock"]}
+        if row["status"] != "Placed":
+            return {"reply": f"ஆர்டர் எண் {order_number} இன்னும் உறுதி செய்யப்படல. ஸ்டாக்ல மாற்றம் செய்யல.", "status": row["status"]}
+        stamp = now()
+        new_stock = row["stock"] + row["quantity"]
+        con.execute("UPDATE products SET stock=? WHERE id=?", (new_stock, row["product_id"]))
+        con.execute("UPDATE orders SET status='received',received_at=? WHERE id=?", (stamp, order_id))
+        con.execute("INSERT INTO stock_movements(product_id,quantity,movement_type,reference_id,created_at) VALUES(?,?,?,?,?)",
+                    (row["product_id"], row["quantity"], "received", order_id, stamp))
+    unit = tamil_unit(row["unit"], row["quantity"])
+    return {"reply": f"சரி அண்ணா, ஆர்டர் எண் {order_number} வந்துச்சு. {row['tamil']} {row['quantity']} {unit} சேர்த்தாச்சு; இப்போ {new_stock} {tamil_unit(row['unit'], new_stock)} இருக்கு.", "status": "received", "stock": new_stock}
 
 
 def is_receipt_message(message: str) -> bool:
@@ -754,7 +805,7 @@ async def complete_voice_receipt(message: str, language: str) -> dict:
         confirmed = con.execute(
             "SELECT o.id,o.quantity,o.confirmed_at,p.id AS product_id,p.name,p.tamil,p.unit "
             "FROM orders o JOIN products p ON p.id=o.product_id "
-            "WHERE o.status='confirmed' ORDER BY o.confirmed_at DESC,o.created_at DESC"
+            "WHERE o.status IN ('confirmed','Placed') ORDER BY o.confirmed_at DESC,o.created_at DESC"
         ).fetchall()
     if not confirmed:
         reply = "இப்போ வந்து சேர்ந்ததுக்காக உறுதி செய்த ஆர்டர் எதுவும் இல்லை அண்ணா; ஸ்டாக்ல மாற்றம் செய்யல." if language == "Tamil" else "I couldn't find a confirmed order to receive, so stock was not changed."
@@ -776,8 +827,10 @@ async def complete_voice_receipt(message: str, language: str) -> dict:
         reply = f"எந்தப் பொருள் வந்துச்சு அண்ணா? உறுதி செய்த ஆர்டர்கள்: {names}." if language == "Tamil" else f"Which item arrived? Confirmed orders are: {', '.join(dict.fromkeys(row['name'] for row in confirmed))}."
         return {"reply": reply, "pending_action": {"type": "choose_receipt_order", "orders": [{"id": row["id"], "product_id": row["product_id"], "name": row["name"], "tamil_name": row["tamil"], "quantity": row["quantity"], "unit": row["unit"]} for row in confirmed]}}
     await receive_order(order["id"])
-    reply = f"சரி அண்ணா, {order['tamil']} {order['quantity']} {tamil_unit(order['unit'], order['quantity'])} வந்துச்சுன்னு பதிவு பண்ணிட்டேன். ஸ்டாக் அப்டேட் பண்ணிட்டேன்." if language == "Tamil" else f"Got it. I marked {order['quantity']} {order['unit']} of {order['name']} as received and updated the stock."
-    return {"reply": reply, "order": {"id": order["id"], "productId": order["product_id"], "qty": order["quantity"], "status": "received"}, "pending_action": None}
+    with connect() as con:
+        current_stock = con.execute("SELECT stock FROM products WHERE id=?", (order["product_id"],)).fetchone()[0]
+    reply = f"சரி அண்ணா, {order['tamil']} {order['quantity']} {tamil_unit(order['unit'], order['quantity'])} வந்துச்சு. ஸ்டாக் இப்போ {current_stock} {tamil_unit(order['unit'], current_stock)}." if language == "Tamil" else f"Got it. {order['quantity']} {order['unit']} of {order['name']} arrived. Current stock is {current_stock} {order['unit']}."
+    return {"reply": reply, "order": {"id": order["id"], "productId": order["product_id"], "qty": order["quantity"], "status": "received"}, "stock": current_stock, "pending_action": None}
 
 
 @app.delete("/api/shop/orders/{order_id}")
@@ -786,7 +839,7 @@ async def cancel_order(order_id: str):
         row = con.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Order not found.")
-        if row["status"] in ("confirmed", "received"):
+        if row["status"] in ("confirmed", "Placed", "received"):
             raise HTTPException(409, "An approved order cannot be cancelled in this demo.")
         con.execute("DELETE FROM orders WHERE id=?", (order_id,))
     return {"ok": True}
@@ -850,8 +903,10 @@ async def resolve_pending_action(message: str, action: dict, language: str) -> d
             return {"reply": f"இந்த ஆர்டர்கள்ல எது வந்துச்சுன்னு சொல்லுங்க அண்ணா: {names}." if language == "Tamil" else f"Which of these orders arrived: {', '.join(item.get('name', '') for item in products)}?", "pending_action": action}
         item = matches[0]
         await receive_order(item["id"])
-        reply = f"சரி அண்ணா, {item['tamil_name']} {item['quantity']} {tamil_unit(item['unit'], item['quantity'])} வந்துச்சுன்னு பதிவு பண்ணிட்டேன். ஸ்டாக் அப்டேட் பண்ணிட்டேன்." if language == "Tamil" else f"Got it. I marked {item['quantity']} {item['unit']} of {item['name']} as received and updated the stock."
-        return {"reply": reply, "order": {"id": item["id"], "productId": item["product_id"], "qty": item["quantity"], "status": "received"}, "pending_action": None}
+        with connect() as con:
+            current_stock = con.execute("SELECT stock FROM products WHERE id=?", (item["product_id"],)).fetchone()[0]
+        reply = f"சரி அண்ணா, {item['tamil_name']} வந்துச்சு. இப்போ ஸ்டாக் {current_stock} {tamil_unit(item['unit'], current_stock)}." if language == "Tamil" else f"Got it. {item['name']} arrived. Current stock is {current_stock} {item['unit']}."
+        return {"reply": reply, "order": {"id": item["id"], "productId": item["product_id"], "qty": item["quantity"], "status": "received"}, "stock": current_stock, "pending_action": None}
     if kind == "restock_offer":
         if choice == "no":
             return {"reply": "சரி அண்ணா, இப்போ ஆர்டர் வேண்டாம். வேற ஏதாவது பார்க்கட்டுமா?" if language == "Tamil" else "Okay, no restock order for now. Need anything else?", "pending_action": None}
@@ -887,13 +942,15 @@ async def resolve_pending_action(message: str, action: dict, language: str) -> d
     if kind == "await_approval":
         order_id = action.get("order_id")
         if choice == "yes":
-            await confirm_order(order_id)
+            confirmation = await confirm_order(order_id)
+            confirmed_order_id = confirmation["id"]
             product = find_product(action.get("product_id"))
             quantity = action.get("quantity", 0)
             name = product["tamil"] if language == "Tamil" and product else (product["name"] if product else "order")
             unit = tamil_unit(product["unit"], quantity) if language == "Tamil" and product else (product["unit"] if product else "units")
-            reply = f"சரி அண்ணா, {name} {quantity} {unit} ஆர்டரை உறுதி பண்ணிட்டேன். சாமான் வந்ததும் வந்து சேர்ந்ததா சொல்லுங்க; ஸ்டாக் அப்போ அப்டேட் ஆகும்." if language == "Tamil" else f"Confirmed: {quantity} {unit} of {name}. Stock will update after you mark the delivery received."
-            return {"reply": reply, "order": {"id": order_id, "productId": action.get("product_id"), "qty": quantity, "status": "confirmed"}, "pending_action": None}
+            order_number = confirmed_order_id.removeprefix("ORD-")
+            reply = f"சரி அண்ணா, order number {order_number} உறுதி ஆயிடுச்சு. {name} {quantity} {unit} வந்ததும் order number சொல்லுங்க; ஸ்டாக் அப்டேட் பண்றேன்." if language == "Tamil" else f"Placed {confirmed_order_id}: {quantity} {unit} of {name}. Say the order number when it arrives to update stock."
+            return {"reply": reply, "order": {"id": confirmed_order_id, "productId": action.get("product_id"), "qty": quantity, "status": "Placed"}, "pending_action": None}
         if choice == "no":
             await cancel_order(order_id)
             return {"reply": "சரி அண்ணா, ஆர்டரை கேன்சல் பண்ணிட்டேன்." if language == "Tamil" else "Okay, I cancelled that order.", "pending_action": None}
@@ -988,7 +1045,7 @@ async def gnani_transcribe(audio_file: UploadFile = File(...)):
                     "preferred_language": "ta-IN",
                     "format": "transcribe",
                     "itn_native_numerals": "true",
-                    "key_terms": json.dumps(["Ponni Rice", "Ponni arisi", "rice", "arisi", "மூட்டை", "மூட்டை அரிசி", "அரிசி", "order", "ஆர்டர்", "pannu", "pannunga", "பண்ணு", "பண்ணுங்க", "வேண்டும்", "வேணும்", "Sunflower Oil", "White Sugar", "Toor Dal", "Filter Coffee", "Wheat Flour", "Milk"], ensure_ascii=False),
+                    "key_terms": json.dumps(["Hey Kural", "Hey Kurul", "Kural", "ஹேய் குரல்", "கே குரல்", "Ponni Rice", "Ponni arisi", "rice", "arisi", "மூட்டை", "மூட்டை அரிசி", "அரிசி", "order", "ஆர்டர்", "pannu", "pannunga", "பண்ணு", "பண்ணுங்க", "வேண்டும்", "வேணும்", "Sunflower Oil", "White Sugar", "Toor Dal", "Filter Coffee", "Wheat Flour", "Milk", "Milk 500ml", "milk pouch", "Paal", "Paalu", "Pal", "பால்", "பால் பாக்கெட்", "ORD", "ord", "order number", "received", "kaapi", "காபி", "soap", "சோப்பு", "atta", "கோதுமை மாவு"], ensure_ascii=False),
                 },
                 files={"audio_file": (audio_file.filename or "shopkeeper.wav", audio, "audio/wav")},
             )
@@ -1021,9 +1078,10 @@ async def gnani_transcribe(audio_file: UploadFile = File(...)):
 class SpeakRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
     voice: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=40)
 
 
-async def speak_tamil(text: str, requested_voice: str | None = None) -> dict:
+async def speak_tamil(text: str, requested_voice: str | None = None, requested_model: str | None = None) -> dict:
     if not GNANI_API_KEY:
         raise HTTPException(503, "Gnani is not configured. Add GNANI_API_KEY to the .env file and restart the app.")
     tamil_text = bool(re.search(r"[\u0B80-\u0BFF]", text))
@@ -1031,7 +1089,7 @@ async def speak_tamil(text: str, requested_voice: str | None = None) -> dict:
     language = "ta-IN" if tamil_text else "en-IN"
     body = {
         "text": text, "voice": voice,
-        "model": os.getenv("GNANI_TTS_MODEL", "timbre-v2.5"), "language": language, "speed": 1.0,
+        "model": requested_model or os.getenv("GNANI_TTS_MODEL", "timbre-v2.5"), "language": language, "speed": 1.0,
         "audio_config": {"sample_rate": 48000, "num_channels": 1, "sample_width": 2, "encoding": "linear_pcm", "container": "wav"},
     }
     try:
@@ -1083,7 +1141,7 @@ def boost_wav_volume(data: bytes) -> bytes:
 
 @app.post("/api/integrations/gnani/speak")
 async def gnani_speak(payload: SpeakRequest):
-    return await speak_tamil(payload.text, payload.voice)
+    return await speak_tamil(payload.text, payload.voice, payload.model)
 
 
 @app.get("/{file_path:path}", include_in_schema=False)

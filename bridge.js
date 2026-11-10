@@ -69,9 +69,10 @@ function setVoiceState(next, note='') {
   const log = document.getElementById('state-log');
   if(log) { const line=document.createElement('div'); line.textContent=message; log.prepend(line); while(log.children.length>8)log.lastChild.remove(); }
   const panel=document.getElementById('voice-console'); if(panel)panel.dataset.state=next;
-  const stateLabel=document.getElementById('voice-stage-state'); if(stateLabel)stateLabel.textContent=({IDLE:'தயார் · “Hey Kural” சொல்லுங்க',LISTENING:'சொல்லுங்க, கேட்கிறேன்',THINKING:'ஒரு நிமிஷம்…',SPEAKING:'பேசுகிறேன்…'})[next];
-  const hint=document.getElementById('voice-stage-hint'); if(hint)hint.textContent=note||({IDLE:wakeEnabled?'மைக் wake phrase-ஐ மட்டும் கவனிக்கிறது. Talk அழுத்தியும் தொடங்கலாம்.':'மைக் நிறுத்தப்பட்டுள்ளது. Talk அழுத்தி மீண்டும் தொடங்குங்க.',LISTENING:'தொடர்ந்து பேசலாம். நிறுத்த Talk அழுத்துங்க.',THINKING:'மைக் இப்போது நிறுத்தப்பட்டுள்ளது.',SPEAKING:'பதில் முடிந்ததும் தான் மீண்டும் கேட்பேன்.'})[next];
-  const current=document.getElementById('current-voice-state'); if(current)current.textContent=next;
+  const waitingForWake=next==='IDLE'&&wakeEnabled;
+  const stateLabel=document.getElementById('voice-stage-state'); if(stateLabel)stateLabel.textContent=waitingForWake?'தயார் · “Hey Kural” காத்திருக்கிறது':({IDLE:'தயார் · மைக் நிறுத்தப்பட்டுள்ளது',LISTENING:'சொல்லுங்க, கேட்கிறேன்',THINKING:'ஒரு நிமிஷம்…',SPEAKING:'பேசுகிறேன்…'})[next];
+  const hint=document.getElementById('voice-stage-hint'); if(hint)hint.textContent=note||({IDLE:wakeEnabled?'Hey Kural சொன்னால் பேசத் தொடங்குவேன். Talk அழுத்தியும் தொடங்கலாம்.':'மைக் நிறுத்தப்பட்டுள்ளது. Talk அழுத்தி மீண்டும் தொடங்குங்க.',LISTENING:'கேட்கிறேன் — தொடர்ந்து பேசலாம். நிறுத்த Talk அழுத்துங்க.',THINKING:'குரலைப் புரிந்துகொள்கிறேன்; மைக் இப்போது நிறுத்தப்பட்டுள்ளது.',SPEAKING:'பதில் பேசுகிறேன்; முடிந்ததும் மீண்டும் கேட்பேன்.'})[next];
+  const current=document.getElementById('current-voice-state'); if(current)current.textContent=waitingForWake?'WAKE STANDBY · HEY KURAL':next;
   const toggle=document.getElementById('voice-stage-toggle'); if(toggle)toggle.textContent=next==='LISTENING'?'■ நிறுத்து':'▶ Talk';
   const orb=document.getElementById('voice-stage-mic'); if(orb)orb.title=next==='LISTENING'?'Stop listening':'Talk';
 }
@@ -116,7 +117,7 @@ function ringPulse(){
 }
 function queueTTS(text,voice,shouldPlay=()=>true){
   const task=ttsQueue.then(async()=>{
-    const result=await api('/api/integrations/gnani/speak','POST',{text,...(voice?{voice}:{})});
+    const result=await api('/api/integrations/gnani/speak','POST',{text,...(voice?{voice}:{}),...(voice==='Shubham'?{model:'timbre-v3.0'}:{})});
     if(!shouldPlay())return;
     const raw=atob(result.audio),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
     const ctx=getAudioContext();if(ctx.state==='suspended')await ctx.resume();
@@ -155,7 +156,8 @@ function speechMeter(){
   const now=performance.now(),rms=Math.sqrt(sum/analyserData.length);
   if(rms>0.002){heardSpeech=true;lastLoud=now;if(captureMode==='call-owner'&&phoneCall&&phoneCall.ownerState!=='SPEAKING')setPhoneStates('SPEAKING','LISTENING');}
   // Leave time for natural pauses inside Tamil/Tanglish phrases.
-  if(heardSpeech&&now-lastLoud>900){recorder.stop();return;}
+  // Keep a little more trailing audio so Prisma receives the last word of a phrase.
+  if(heardSpeech&&now-lastLoud>1300){recorder.stop();return;}
   if(!heardSpeech&&now-speechStart>6500){recorder.stop();return;}
   if(now-speechStart>15000){recorder.stop();return;}
   raf=requestAnimationFrame(speechMeter);
@@ -221,7 +223,7 @@ async function startCapture(mode){
         if(mode==='wake'){
           setVoiceState('THINKING','“Hey Kural” wake phrase-ஐ சரிபார்க்கிறேன்.');
           const text=await transcribe(audio);const normalized=text.toLowerCase().replace(/[^a-z\u0B80-\u0BFF ]/g,' ').replace(/\s+/g,' ').trim();
-          const wake=/\bhey\s*(?:kural|குரல்|குறள்)/.test(normalized)||/ஹேய்?\s*(?:குரல்|குறள்)|ஹே\s*குரல்|ஹேகுரல்|கே\s*குரல்|ஏய்\s*குரல்/.test(normalized);
+          const wake=/\b(?:hey|hai|he)\s*(?:kural|kurul|kurall|kuralu)\b/.test(normalized)||/ஹேய்?\s*(?:குரல்|குறள்)|ஹே\s*குரல்|ஹேகுரல்|கே\s*குரல்|ஏய்\s*குரல்/.test(normalized);
           if(wake){wakeEnabled=false;await beginConversation();return;}
           setVoiceState('IDLE');if(wakeEnabled)setTimeout(()=>startCapture('wake'),180);return;
         }
@@ -240,7 +242,8 @@ async function startCapture(mode){
         if(voiceState!=='LISTENING')return;
         setVoiceState('LISTENING','மைக் நிறுத்தப்பட்டுள்ளது. Gnani Prisma பேச்சை மாற்றுகிறது…');
         const text=await transcribe(audio);if(voiceState!=='LISTENING')return;
-        const singleWordDecision=Boolean(pendingDecision&&(yesAnswer(text)||noAnswer(text)||(pendingDecision.type==='await_order_quantity'&&quantityFrom(text))));
+        // A catalog product by itself is a safe stock lookup or product choice; it cannot place an order.
+        const singleWordDecision=Boolean(productIdFromSpeech(text)||(pendingDecision&&(yesAnswer(text)||noAnswer(text)||(pendingDecision.type==='await_order_quantity'&&quantityFrom(text))||(pendingDecision.type==='await_receipt_quantity'&&quantityFrom(text))||(pendingDecision.type==='choose_suggested_reorder'&&productIdFromSpeech(text))||(pendingDecision.type==='order_receipt_number'&&/\d/.test(text)))));
         const singleWordOrder=/^(order|reorder|restock|pannu|pannunga|podu|podunga|பண்ணு|பண்ணுங்க|போடு|போடுங்க|ஆர்டர்)$/i.test(text.trim());
         if(!text||(!singleWordDecision&&!singleWordOrder&&text.trim().split(/\s+/).length<2)){
           showVoiceError('பேச்சு தெளிவாக கேட்கவில்லை. மைக்குக்கு அருகில் இருந்து மீண்டும் சொல்லுங்க.');
@@ -266,7 +269,7 @@ async function startCapture(mode){
   }
   finally{micStarting=false;}
 }
-function armWake(){if(phoneCall&&['ringing','active'].includes(phoneCall.status))return;wakeEnabled=true;if(voiceState==='IDLE')startCapture('wake');}
+function armWake(){if(phoneCall&&['ringing','active'].includes(phoneCall.status))return;wakeEnabled=true;if(voiceState==='IDLE'){setVoiceState('IDLE');startCapture('wake');}}
 async function beginConversation(){
   clearVoiceError();pendingDecision=null;unclearCount=0;conversationActive=true;
   try{
@@ -284,32 +287,104 @@ async function talk(){
   if(voiceState==='IDLE')beginConversation();
 }
 
-function yesAnswer(text){return /\b(seri|sari|order\s*panu|aama|ama|yes)\b/i.test(text)||/(ஆம்|ஆமா|சரி|போடுங்க|ஆர்டர்)/.test(text);}
-function noAnswer(text){return /\b(venam|vendam|no|illa)\b/i.test(text)||/(இல்ல|வேண்டாம்|வேணாம்)/.test(text);}
+function yesAnswer(text){return /\b(seri|sari|order\s*panu|aama|ama|yes|ok|okay)\b/i.test(text)||/(ஆம்|ஆமா|சரி|போடுங்க|ஆர்டர்)/.test(text);}
+function noAnswer(text){return /\b(venam|vendam|veenaam|vaenaam|no|illa)\b/i.test(text)||/(இல்ல|வேண்டாம்|வேணாம்)/.test(text);}
 function quantityFrom(text){const found=text.match(/\b(\d{1,4})\b/);if(found)return Number(found[1]);const tamilDigits={'௦':'0','௧':'1','௨':'2','௩':'3','௪':'4','௫':'5','௬':'6','௭':'7','௮':'8','௯':'9'};const indic=text.replace(/[௦-௯]/g,d=>tamilDigits[d]).match(/\b(\d{1,4})\b/);if(indic)return Number(indic[1]);const words={oru:1,onnu:1,one:1,rendu:2,irandu:2,two:2,moonnu:3,moonu:3,three:3,naalu:4,nalu:4,four:4,anju:5,aindhu:5,five:5,aaru:6,six:6,ezhu:7,ettu:8,onpathu:9,pathu:10,ten:10};for(const [word,value] of Object.entries(words))if(new RegExp(`\\b${word}\\b`,'i').test(text))return value;const tamilWords={'ஒரு':1,'ஒன்னு':1,'ஒன்று':1,'ரெண்டு':2,'இரண்டு':2,'மூணு':3,'மூன்று':3,'நாலு':4,'நான்கு':4,'அஞ்சு':5,'ஐந்து':5,'ஆறு':6,'ஏழு':7,'எட்டு':8,'ஒன்பது':9,'பத்து':10};for(const [word,value] of Object.entries(tamilWords))if(text.includes(word))return value;return null;}
-function latestConfirmedOrder(){return db.orders.find(order=>order.status==='confirmed');}
+function latestConfirmedOrder(){return db.orders.find(order=>order.status==='confirmed'||order.status==='Placed');}
+function orderNumberFromSpeech(text){
+  // Accept the full order label, the spoken abbreviation “ord”, and IDs like ORD-104.
+  const match=text.match(/(?:\border\b|\bord\b|\bo\s*r\s*d\b|ஆர்டர்)\s*(?:(?:id|number|no\.?|எண்|ஐடி)\s*)?[-#]?\s*(\d{1,6})\b/i);
+  if(match)return Number(match[1]);
+  // Prisma may return Tamil numerals even when its number-normalization varies.
+  const tamilDigits={'௦':'0','௧':'1','௨':'2','௩':'3','௪':'4','௫':'5','௬':'6','௭':'7','௮':'8','௯':'9'};
+  const native=text.replace(/[௦-௯]/g,d=>tamilDigits[d]);
+  const nativeMatch=native.match(/(?:\border\b|\bord\b|\bo\s*r\s*d\b|ஆர்டர்)\s*(?:(?:id|number|no\.?|எண்|ஐடி)\s*)?[-#]?\s*(\d{1,6})\b/i);
+  if(nativeMatch)return Number(nativeMatch[1]);
+  // Accept digit-by-digit spoken IDs such as “ord one zero four”, without guessing other number phrases.
+  const spoken=text.match(/(?:\border\b|\bord\b|\bo\s*r\s*d\b|ஆர்டர்)\s*(?:(?:id|number|no\.?|எண்|ஐடி)\s*)?((?:(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\s*){2,6})\b/i);
+  if(!spoken)return null;
+  const digits={zero:'0',oh:'0',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9'};
+  const value=(spoken[1].toLowerCase().match(/zero|oh|one|two|three|four|five|six|seven|eight|nine/g)||[]).map(word=>digits[word]).join('');
+  return value?Number(value):null;
+}
+// Strict order intent parsing: a receipt needs a spoken order number.
+function parseOrderVoiceIntent(text){
+  if(isReceipt(text)&&(latestConfirmedOrder()||/\border\b|\bord\b|\bo\s*r\s*d\b|ஆர்டர்/i.test(text))){
+    const order_number=orderNumberFromSpeech(text);
+    return {intent:order_number?'receive_order':'unclear',order_number};
+  }
+  if(pendingDecision?.type==='supplier_order'&&yesAnswer(text))return {intent:'confirm_order',order_number:null};
+  if(pendingDecision?.type==='supplier_order'&&noAnswer(text))return {intent:'cancel_order',order_number:null};
+  return {intent:'unclear',order_number:null};
+}
+function hasOrderReceiptIntent(text){return isReceipt(text)&&(Boolean(latestConfirmedOrder())||/\border\b|\bord\b|\bo\s*r\s*d\b|ஆர்டர்/i.test(text));}
 function isReceipt(text){
-  const receiptVerb=/(vandhiruk|vandhuruk|vandhuch|vandhuduch|received|arrived|got\s+(it|delivered)|வந்திருக்க|வந்துருக்கு|வந்துச்சு|வந்துடுச்சு|கிடைச்சிருக்கு)/i.test(text);
-  const itemContext=/(mutta|moottai|mootai|bag|kg|litre|rice|arisi|sugar|seeni|oil|ennai|dal|paruppu|அரிசி|சர்க்கரை|எண்ணெய்|பருப்பு|மூட்டை|order|item|சரக்கு|ஆர்டர்)/i.test(text);
+  const receiptVerb=/(vandhiruk|vandhiruch|vandhuruk|vandhuch|vandhuduch|received|arrived|got\s+(it|delivered)|வந்திருக்க|வந்துருக்கு|வந்துச்சு|வந்துடுச்சு|கிடைச்சிருக்கு)/i.test(text);
+  const itemContext=/(mutta|moottai|mootai|bag|kg|litre|rice|arisi|sugar|seeni|oil|ennai|dal|paruppu|அரிசி|சர்க்கரை|எண்ணெய்|பருப்பு|மூட்டை|order|ord|item|சரக்கு|ஆர்டர்)/i.test(text);
   return receiptVerb&&(itemContext||Boolean(latestConfirmedOrder()));
 }
-function isStockQuestion(text){return /(stock|ஸ்டாக்|இருப்பு|arisi|rice|அரிசி|mutta|மூட்டை|sugar|seeni|சர்க்கரை|cooking\s*oil|oil|ennai|எண்ணெய்|dal|paruppu|பருப்பு)/i.test(text);}
-function productIdFromSpeech(text){const t=text.toLowerCase();if(/sugar|seeni|சர்க்கரை/.test(t))return 'sugar';if(/cooking\s*oil|sunflower|oil|ennai|எண்ணெய்/.test(t))return 'oil';if(/dal|paruppu|துவரம்|பருப்பு/.test(t))return 'dal';if(/rice|arisi|அரிசி|மூட்டை|mutta/.test(t))return 'rice';return null;}
-function unitTamil(p){return ({rice:'மூட்டை',sugar:'கிலோ',oil:'லிட்டர்',dal:'கிலோ'}[p?.id]||p?.unit||'');}
+function isStockQuestion(text){return /(stock|ஸ்டாக்|இருப்பு|arisi|rice|அரிசி|mutta|மூட்டை|sugar|seeni|சர்க்கரை|cooking\s*oil|oil|ennai|எண்ணெய்|dal|paruppu|பருப்பு|milk|paal|பால்|coffee|kaapi|காபி|soap|சோப்பு|atta|flour|கோதுமை)/i.test(text);}
+function isIncomingStockAdd(text){return /(add|increase|stock\s*(?:add|increase)|arrived|received|delivered|சேர்க்க|கூட்ட|வந்துடுச்சு|வந்துருச்சு|வந்தாச்சு|vandhuduchu|vandhuchu|vandhuruchu)/i.test(text);}
+function isReorderAdviceQuestion(text){
+  // Accept everyday Tamil/Tanglish question forms so they reach stock advice.
+  const asksForChoiceOrAmount=/(\bwhich\b|\bwhat\b|\bwhich\s+(?:stock|item|product)\b|\bhow\s*much\b|\bhow\s*many\b|\bshould\s+i\s+(?:order|buy)\b|\b(?:entha|edha|edhai|edhu|ethana|evlo|evalavu|ethuku)\b|எதை|எது|எதுக்கு|எந்த|எவ்வளவு|எத்தனை)/i.test(text);
+  const mentionsReorder=/\b(?:order|reorder|restock|re-stock|buy|vaanga|vaanganum|vaangalaam|podalam|pannalam)\b|ஆர்டர்|ரீஸ்டாக்|வாங்க/i.test(text);
+  return asksForChoiceOrAmount&&mentionsReorder&&!quantityFrom(text);
+}
+function reorderAdviceFor(text){
+  const selected=productIdFromSpeech(text),items=selected?db.products.filter(p=>p.id===selected):db.products.filter(p=>p.stock<=p.min);
+  if(!items.length)return {reply:'அண்ணா, இப்போ எந்தப் பொருளும் குறைந்தபட்ச ஸ்டாக்குக்குக் கீழ இல்லை. ஆர்டர் பரிந்துரை தேவையில்லை.'};
+  const suggestions=items.map(p=>({product:p,quantity:Math.max(p.min*2-p.stock,p.min)}));
+  if(selected){const {product:p,quantity}=suggestions[0];if(p.stock>p.min)return {reply:`${p.tamil} இப்போ ${p.stock} ${unitTamil(p)} இருக்கு; குறைந்தபட்சம் ${p.min}. இப்போதைக்கு ரீஸ்டாக் தேவையில்லை.`};return {reply:`${p.tamil} இப்போ ${p.stock} ${unitTamil(p)} இருக்கு. ${quantity} ${unitTamil(p)} வாங்கினா நல்லா இருக்கும். இதுக்கு விலை கேட்கட்டுமா?`,pending:{type:'suggested_order',product_id:p.id,quantity}};}
+  const summary=suggestions.map(({product:p,quantity})=>`${p.tamil} ${quantity} ${unitTamil(p)}`).join(', ');
+  return {reply:`அண்ணா, குறைஞ்ச ஸ்டாக் உள்ள பொருட்களுக்கு பரிந்துரை: ${summary}. எதுக்கு சப்ளையர்கிட்ட விலை கேட்கட்டும்?`,pending:{type:'choose_suggested_reorder',items:suggestions.map(({product:p,quantity})=>({product_id:p.id,quantity}))}};
+}
+function productIdFromSpeech(text){
+  const t=text.toLowerCase();
+  const aliases={milk:/milk|paal|pal|பால்/,coffee:/filter\s*coffee|coffee|kaapi|காபி/,soap:/bath\s*soap|soap|சோப்பு/,atta:/wheat\s*flour|atta|flour|கோதுமை|மாவு/,sugar:/sugar|seeni|sakkarai|சர்க்கரை|சீனி/,oil:/cooking\s*oil|sunflower|oil|ennai|எண்ணெய்/,dal:/toor\s*dal|dal|paruppu|துவரம்|பருப்பு/,rice:/ponni|rice|arisi|அரிசி|மூட்டை|mutta|mootai/};
+  for(const id of ['milk','coffee','soap','atta','sugar','oil','dal','rice'])if(aliases[id].test(t))return id;
+  const matches=db.products.filter(p=>[p.id,p.name,p.tamil].some(name=>name&&t.includes(String(name).toLowerCase()))).sort((a,b)=>Math.max(b.name.length,b.tamil.length)-Math.max(a.name.length,a.tamil.length));
+  return matches[0]?.id||null;
+}
+function unitTamil(p){return ({rice:'மூட்டை',sugar:'கிலோ',oil:'லிட்டர்',dal:'கிலோ',milk:'பாக்கெட்',coffee:'பேக்',soap:'பீஸ்',atta:'கிலோ'}[p?.id]||p?.unit||'');}
 function itemTamil(p){return p?.tamil||p?.name||'பொருள்';}
 async function processCommand(text){
   clearVoiceError();const normalized=text.toLowerCase();
+  if(pendingDecision?.type==='order_receipt_number'){
+    const decision=pendingDecision,number=orderNumberFromSpeech(text)||text.match(/\b(\d{1,6})\b/)?.[1];
+    if(number){pendingDecision=null;try{const result=await api(`/api/shop/orders/by-number/${Number(number)}/receive`,'POST',{});if(result.status==='received')await refreshState();await finishAndIdle(result.reply);}catch(error){showVoiceError(error.message);setVoiceState('IDLE');armWake();}return;}
+    if(!decision.repeated){pendingDecision={type:'order_receipt_number',repeated:true};await sayThenListen('ஆர்டர் எண் தெளிவா கேட்கல அண்ணா. எண்ணை மட்டும் மறுபடியும் சொல்லுங்க.');return;}
+    pendingDecision=null;await finishAndIdle('ஆர்டர் எண்ணை புரிஞ்சுக்க முடியல. ஸ்டாக்ல எந்த மாற்றமும் செய்யல.');return;
+  }
+  if(hasOrderReceiptIntent(normalized)){
+    const parsed=parseOrderVoiceIntent(text),number=parsed.intent==='receive_order'?parsed.order_number:null;
+    if(!number){pendingDecision={type:'order_receipt_number',repeated:false};await sayThenListen('எந்த ஆர்டர் எண் வந்துச்சு அண்ணா? எண்ணைச் சொல்லுங்க.');return;}
+    try{const result=await api(`/api/shop/orders/by-number/${number}/receive`,'POST',{});if(result.status==='received')await refreshState();await finishAndIdle(result.reply);}catch(error){showVoiceError(error.message);setVoiceState('IDLE');armWake();}return;
+  }
   if(pendingDecision){
     const decision=pendingDecision;pendingDecision=null;
+    if(decision.type==='choose_suggested_reorder'){
+      const productId=productIdFromSpeech(text),selected=decision.items.find(item=>item.product_id===productId);
+      if(!selected){pendingDecision=decision;await sayThenListen('குறைஞ்ச ஸ்டாக்ல இருக்கிற பொருள்களில் எதைப் பற்றி விலை கேட்கணும்? பெயரைச் சொல்லுங்க.');return;}
+      await requestSupplierQuote(selected.quantity,selected.product_id);return;
+    }
     if(decision.type==='await_order_quantity'){
       if(noAnswer(text)){await finishAndIdle('சரி, ஆர்டர் கேட்கல.');return;}
       const quantity=quantityFrom(text), productId=decision.product_id||'rice';
       if(!quantity){pendingDecision=decision;await sayThenListen(`எத்தனை ${unitTamil(product(productId))} ஆர்டர் கேட்கட்டும்?`);return;}
       await requestSupplierQuote(quantity,productId);return;
     }
+    if(decision.type==='await_receipt_quantity'){
+      const quantity=quantityFrom(text);
+      if(!quantity){pendingDecision=decision;await sayThenListen(`எத்தனை ${unitTamil(product(decision.product_id))} சேர்க்கணும்?`);return;}
+      const item=product(decision.product_id);pendingDecision={type:'receipt',product_id:decision.product_id,quantity};
+      await sayThenListen(`சரி, ${quantity} ${unitTamil(item)} ${itemTamil(item)} ஸ்டாக்ல சேர்க்கப் போறேன். உறுதி செய்யலாமா?`);return;
+    }
     if(yesAnswer(text)){
+      if(decision.type==='suggested_order'){await requestSupplierQuote(decision.quantity,decision.product_id);return;}
       if(decision.type==='receipt'){
-        try{const result=await api('/api/shop/stock-receipt','POST',{product_id:'rice',quantity:decision.quantity});await refreshState();await finishAndIdle(`சரி, ${result.added} மூட்டை அரிசி ஸ்டாக்ல சேர்த்துட்டேன். இப்போ ${result.stock} மூட்டை இருக்கு.`);}
+        const productId=decision.product_id||'rice',item=product(productId);
+        try{const result=await api('/api/shop/stock-receipt','POST',{product_id:productId,quantity:decision.quantity});await refreshState();const updated=product(productId);await finishAndIdle(`சரி, ${result.added} ${unitTamil(item)} ${itemTamil(item)} ஸ்டாக்ல சேர்த்துட்டேன். இப்போ ${updated.stock} ${unitTamil(updated)} இருக்கு.`);}
         catch(error){showVoiceError(error.message);setVoiceState('IDLE');armWake();}return;
       }
       if(decision.type==='receive_order'){
@@ -318,10 +393,10 @@ async function processCommand(text){
       }
       if(decision.type==='supplier_order'){
         try{
-          await api(`/api/shop/orders/${decision.order_id}/confirm`,'POST',{});await refreshState();
+          const confirmation=await api(`/api/shop/orders/${decision.order_id}/confirm`,'POST',{});await refreshState();
           // Owner approval authorizes the purchase; call again to tell the
           // wholesaler to finalize it before returning to the dashboard.
-          await startPhoneCall({order_id:decision.order_id});
+          await startPhoneCall({order_id:confirmation.id});
         }catch(error){showVoiceError(`ஆர்டர் உறுதி செய்ய முடியவில்லை: ${error.message}`);setVoiceState('IDLE');armWake();}return;
       }
       await requestSupplierQuote(decision.quantity||10,decision.product_id||'rice');return;
@@ -334,16 +409,25 @@ async function processCommand(text){
       await finishAndIdle('சரி, இப்போதைக்கு எதுவும் செய்யல.');return;
     }
     unclearCount++;
-    if(unclearCount===1){pendingDecision=decision;await sayThenListen(decision.type==='supplier_order'?'சப்ளையர் சொன்ன விலைக்கு ஆர்டர் போடட்டுமா? ஆம் அல்லது வேண்டாம் சொல்லுங்க.':'சரி, ஆர்டர் உறுதி செய்யட்டுமா? ஆம் அல்லது வேண்டாம் சொல்லுங்க.');return;}
+    if(unclearCount===1){pendingDecision=decision;const prompt=decision.type==='supplier_order'?'சப்ளையர் சொன்ன விலைக்கு ஆர்டர் போடட்டுமா? ஆம் அல்லது வேண்டாம் சொல்லுங்க.':decision.type==='suggested_order'?'சப்ளையர்கிட்ட இந்த அளவுக்கு விலை கேட்கட்டுமா? ஆம் அல்லது வேண்டாம் சொல்லுங்க.':'சரி, ஆர்டர் உறுதி செய்யட்டுமா? ஆம் அல்லது வேண்டாம் சொல்லுங்க.';await sayThenListen(prompt);return;}
     await finishAndIdle('சரி, தெளிவாகக் கேட்கல. பின்னாடி பேசலாம்.');return;
+  }
+  if(isIncomingStockAdd(normalized)){
+    const productId=productIdFromSpeech(text),quantity=quantityFrom(text);
+    if(!productId){await finishAndIdle('எந்தப் பொருளை ஸ்டாக்ல சேர்க்கணும்? பெயரைச் சொல்லுங்க.');return;}
+    if(!quantity){pendingDecision={type:'await_receipt_quantity',product_id:productId};await sayThenListen(`எத்தனை ${unitTamil(product(productId))} சேர்க்கணும்?`);return;}
+    const item=product(productId);pendingDecision={type:'receipt',product_id:productId,quantity};
+    await sayThenListen(`சரி, ${quantity} ${unitTamil(item)} ${itemTamil(item)} ஸ்டாக்ல சேர்க்கப் போறேன். உறுதி செய்யலாமா?`);return;
   }
   if(isReceipt(normalized)){
     try{const result=await api('/api/chat','POST',{message:text,history:[]});await refreshState();await finishAndIdle(result.reply);}
     catch(error){showVoiceError(error.message);setVoiceState('IDLE');armWake();}return;
   }
+  if(isReorderAdviceQuestion(normalized)){const advice=reorderAdviceFor(normalized);pendingDecision=advice.pending||null;await finishAndIdle(advice.reply);return;}
   if(/\b(order|reorder|restock|pannu|pannunga|podu|podunga)\b|ஆர்டர்|ரீஸ்டாக்|மீண்டும் வாங்க|பண்ணு|பண்ணுங்க|போடு|போடுங்க|வாங்கு/i.test(normalized)){
     const quantity=quantityFrom(normalized);
-    const productId=productIdFromSpeech(normalized)||'rice';
+    const productId=productIdFromSpeech(normalized);
+    if(!productId){await finishAndIdle('எந்தப் பொருளுக்கு ஆர்டர் கேட்கணும்? பெயரைச் சொல்லுங்க.');return;}
     if(!quantity){pendingDecision={type:'await_order_quantity',product_id:productId};await sayThenListen(`எத்தனை ${unitTamil(product(productId))} ${itemTamil(product(productId))} ஆர்டர் கேட்கட்டும்?`);return;}
     await requestSupplierQuote(quantity,productId);return;
   }
@@ -410,7 +494,7 @@ async function startPhoneCall(options={}){
 async function speakWholesaler(text){
   if(!phoneCall||phoneCall.status!=='active')return;
   setVoiceState('SPEAKING','Wholesaler பதில் ஒலிக்கிறது; மைக் நிறுத்தப்பட்டுள்ளது.');setPhoneStates('THINKING','SPEAKING');addPhoneLine('wholesaler',text);syncPhoneUI();
-  await queueTTS(text,'Asmita',()=>Boolean(phoneCall&&phoneCall.status==='active'&&phoneCall.speakerEnabled));
+  await queueTTS(text,'Shubham',()=>Boolean(phoneCall&&phoneCall.status==='active'&&phoneCall.speakerEnabled));
 }
 function ownerAcknowledgement(text){
   if(phoneCall?.pendingApproval){
@@ -445,9 +529,10 @@ async function returnToOwnerDashboard(order){
     const quote=db.orders.find(item=>item.id===order.id),unitCost=Number(quote?.unitCost??order.unit_cost??0),total=unitCost*quantity;
     pendingDecision={type:'supplier_order',order_id:order.id,quantity,product_id:productId};unclearCount=0;
     message=`முருகன், சப்ளையர் ${quantity} ${unit} ${productName} தர்றேன்னு சொல்றார். ஒரு ${unit} ${unitCost} ரூபா; மொத்தம் ${total} ரூபா. நாளைக்கு அனுப்புவாராம். ஆர்டரை உறுதி பண்ணட்டுமா?`;
-  }else if(order?.status==='confirmed'){
+  }else if(order?.status==='confirmed'||order?.status==='Placed'){
     pendingDecision=null;
-    message=`சரி முருகன், ${quantity} ${unit} ${productName} ஆர்டர் உறுதி ஆயிடுச்சு. சரக்கு வந்ததும் ${productName} வந்துடுச்சுன்னு சொல்லுங்க; ஸ்டாக்ல சேர்த்துடுவேன்.`;
+    const orderId=order?.id||phoneCall.order?.id||'ஆர்டர் ஐடி கிடைக்கவில்லை';
+    message=`சரி முருகன், ${quantity} ${unit} ${productName} ஆர்டர் உறுதி ஆயிடுச்சு. ஆர்டர் ஐடி ${orderId}. இதை நினைவில் வச்சுக்கோங்க; சரக்கு வந்ததும் இதே ஐடியைச் சொல்லுங்க, ஸ்டாக்ல சேர்த்துடுவேன்.`;
   }else{
     pendingDecision={type:'await_order_quantity',product_id:productId};
     message=`சப்ளையர் ${productName} ஸ்டாக்கும் விலையும் சொன்னார். எத்தனை ${unit} ஆர்டர் கேட்கட்டும்?`;
@@ -462,7 +547,7 @@ async function answerPhoneCall(){
     if(ringTimer){clearInterval(ringTimer);ringTimer=null;}
     phoneCall.status='active';phoneCall.startedAt=Date.now();syncPhoneUI();
     const quantity=phoneCall.order?.quantity||phoneCall.order?.qty;
-    const alreadyApproved=phoneCall.order?.status==='confirmed';
+    const alreadyApproved=phoneCall.order?.status==='confirmed'||phoneCall.order?.status==='Placed';
     const orderProduct=product(phoneCall.order?.product_id||phoneCall.order?.productId||'rice');
     const productName=itemTamil(orderProduct), unit=unitTamil(orderProduct);
     const buyerLine=alreadyApproved
@@ -490,7 +575,7 @@ async function sendPhoneTurn(text){
     if(!phoneCall||phoneCall.id!==callId||phoneCall.status!=='active')return;
     phoneCall.pendingApproval=Boolean(result.pending_approval);phoneCall.order=result.order||phoneCall.order;phoneCall.generatedBy=result.generated_by;
     await speakWholesaler(result.reply);
-    if(phoneCall?.id===callId&&phoneCall.status==='active'&&phoneCall.order?.status==='confirmed'&&!phoneCall.pendingApproval){await returnToOwnerDashboard(phoneCall.order);return;}
+    if(phoneCall?.id===callId&&phoneCall.status==='active'&&['confirmed','Placed'].includes(phoneCall.order?.status)&&!phoneCall.pendingApproval){await returnToOwnerDashboard(phoneCall.order);return;}
     if(phoneCall?.id===callId&&phoneCall.status==='active'){setVoiceState('LISTENING');setPhoneStates('LISTENING','LISTENING');await startCapture('call-owner');}
   }catch(error){
     if(phoneCall?.id===callId&&phoneCall.status==='active'){showPhoneError(error.message);setVoiceState('LISTENING');setPhoneStates('LISTENING','LISTENING');setTimeout(()=>startCapture('call-owner'),350);}
