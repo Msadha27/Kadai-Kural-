@@ -28,8 +28,7 @@ Kirana stores can lose sales when popular items run out. They can also tie up mo
 - Local Ollama model accessed through LangChain for intent understanding and shop replies.
 
 ## Demo
-
-[DEMO VIDEO LINK]
+(https://drive.google.com/file/d/16I2N1DaqfXmHsRyTo6qSuSiKn3xe3ivA/view?usp=drive_link)
 
 ## Tech Stack
 
