@@ -101,4 +101,4 @@ I designed the system flow, and AI coding tools helped build the code.
 
 ## Author
 
-[YOUR NAME], final-year B.E. CSE (AI/ML), Malnad College of Engineering, Hassan
+M Sadhamail, final-year B.E. CSE (AI/ML), Malnad College of Engineering, Hassan
