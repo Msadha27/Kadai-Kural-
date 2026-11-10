@@ -9,6 +9,7 @@ let recorder = null;
 let captureMode = null;
 let stream = null;
 let selectedMicrophoneId = localStorage.getItem('kadaiKuralMicId') || '';
+let microphoneOptionsRefreshedAfterPermission = false;
 let analyserContext = null;
 let analyser = null;
 let analyserSource = null;
@@ -144,7 +145,7 @@ function clearVoiceError(){const el=document.getElementById('voice-error');if(el
 async function stopCapture(){
   if(raf)cancelAnimationFrame(raf);raf=0;
   if(analyserSource){try{analyserSource.disconnect();}catch{}analyserSource=null;}
-  if(analyserContext){await analyserContext.close().catch(()=>{});analyserContext=null;}analyser=null;
+  analyser=null;analyserData=null;
   if(recorder&&recorder.state==='recording'){recorder.onstop=null;recorder.stop();}
   recorder=null;captureMode=null;stream?.getTracks().forEach(track=>track.stop());stream=null;
 }
@@ -154,7 +155,7 @@ function speechMeter(){
   const now=performance.now(),rms=Math.sqrt(sum/analyserData.length);
   if(rms>0.002){heardSpeech=true;lastLoud=now;if(captureMode==='call-owner'&&phoneCall&&phoneCall.ownerState!=='SPEAKING')setPhoneStates('SPEAKING','LISTENING');}
   // Leave time for natural pauses inside Tamil/Tanglish phrases.
-  if(heardSpeech&&now-lastLoud>1400){recorder.stop();return;}
+  if(heardSpeech&&now-lastLoud>900){recorder.stop();return;}
   if(!heardSpeech&&now-speechStart>6500){recorder.stop();return;}
   if(now-speechStart>15000){recorder.stop();return;}
   raf=requestAnimationFrame(speechMeter);
@@ -207,7 +208,7 @@ async function startCapture(mode){
       selectedMicrophoneId='';localStorage.removeItem('kadaiKuralMicId');await refreshMicrophoneOptions();
       stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
     }
-    await refreshMicrophoneOptions();
+    if(!microphoneOptionsRefreshedAfterPermission){await refreshMicrophoneOptions();microphoneOptionsRefreshedAfterPermission=true;}
     if((mode==='wake'&&(!wakeEnabled||voiceState!=='IDLE'))||(mode==='command'&&voiceState!=='LISTENING')||(mode==='call-owner'&&(!phoneCall||phoneCall.status!=='active'||phoneCall.micMuted||phoneCall.ownerState!=='LISTENING'))){await stopCapture();return;}
     const mime=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'';
     recorder=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:64000}:{});captureMode=mode;chunks=[];heardSpeech=false;lastLoud=0;
@@ -257,7 +258,7 @@ async function startCapture(mode){
       }
     };
     recorder.start();speechStart=performance.now();
-    const C=window.AudioContext||window.webkitAudioContext;analyserContext=new C();analyser=analyserContext.createAnalyser();analyser.fftSize=1024;analyserData=new Float32Array(analyser.fftSize);analyserSource=analyserContext.createMediaStreamSource(stream);analyserSource.connect(analyser);await analyserContext.resume();raf=requestAnimationFrame(speechMeter);
+    analyserContext=getAudioContext();if(analyserContext.state==='suspended')await analyserContext.resume();analyser=analyserContext.createAnalyser();analyser.fftSize=1024;analyserData=new Float32Array(analyser.fftSize);analyserSource=analyserContext.createMediaStreamSource(stream);analyserSource.connect(analyser);await analyserContext.resume();raf=requestAnimationFrame(speechMeter);
   }catch(error){
     await stopCapture();const message=error.name==='NotAllowedError'?'Browser settings-ல் localhost-க்கு மைக் அனுமதி கொடுங்க.':error.message;
     if(mode==='call-owner'&&phoneCall?.status==='active'){showPhoneError(message);setVoiceState('LISTENING');setPhoneStates('LISTENING','LISTENING');}
@@ -409,8 +410,7 @@ async function startPhoneCall(options={}){
 async function speakWholesaler(text){
   if(!phoneCall||phoneCall.status!=='active')return;
   setVoiceState('SPEAKING','Wholesaler பதில் ஒலிக்கிறது; மைக் நிறுத்தப்பட்டுள்ளது.');setPhoneStates('THINKING','SPEAKING');addPhoneLine('wholesaler',text);syncPhoneUI();
-  try{await queueTTS(text,'Shubham',()=>Boolean(phoneCall&&phoneCall.status==='active'&&phoneCall.speakerEnabled));}
-  catch(error){showPhoneError(`Gnani Timbre: ${error.message}`);}
+  await queueTTS(text,'Asmita',()=>Boolean(phoneCall&&phoneCall.status==='active'&&phoneCall.speakerEnabled));
 }
 function ownerAcknowledgement(text){
   if(phoneCall?.pendingApproval){
